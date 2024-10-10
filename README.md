@@ -8,3 +8,10 @@ cd build
 cmake build ..
 make
 ```
+
+## Running
+
+```
+cd build
+src/exchange_server
+```
