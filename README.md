@@ -1,17 +1,9 @@
-# Exchange Server Example
+# Fenrir
 
 ## Building Instructions
 
-```bash
-mkdir build
-cd build
-cmake build ..
-make
-```
+TODO
 
 ## Running
 
-```
-cd build
-src/exchange_server
-```
+TODO
