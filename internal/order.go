@@ -12,7 +12,7 @@ const (
 	sell
 )
 
-// NOTE might want to compare with `Float` from `math/big`: more precise but slower
+// NOTE: might want to compare with `Float` from `math/big`: more precise but slower
 type Order struct {
 	side    Side
 	price   float64
