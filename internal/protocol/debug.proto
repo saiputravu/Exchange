@@ -1,14 +1,12 @@
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
-
 package protocol;
 
 option go_package = "./fenrir/internal/protocol";
 
 service Debug {
   // Returns debug information about the server.
-  rpc QueryServer(google.protobuf.Empty) returns (ServerInfo) {}
+  rpc QueryServer(Empty) returns (ServerInfo) {}
 }
 
 enum ServerType {
@@ -21,11 +19,13 @@ message ServerInfo {
   ServerType type = 1;
 
   // Identity of server.
-  int32 id = 2;
+  uint32 id = 2;
 
   // Port the server is running on.
   uint32 port = 3;
 
   // Established connections.
-  int32 connections = 4;
+  uint32 connections = 4;
 }
+
+message Empty {}

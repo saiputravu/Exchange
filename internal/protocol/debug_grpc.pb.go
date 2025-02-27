@@ -8,8 +8,6 @@ package protocol
 
 import (
 	context "context"
-
-	empty "github.com/golang/protobuf/ptypes/empty"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -29,7 +27,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type DebugClient interface {
 	// Returns debug information about the server.
-	QueryServer(ctx context.Context, in *empty.Empty, opts ...grpc.CallOption) (*ServerInfo, error)
+	QueryServer(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ServerInfo, error)
 }
 
 type debugClient struct {
@@ -40,7 +38,7 @@ func NewDebugClient(cc grpc.ClientConnInterface) DebugClient {
 	return &debugClient{cc}
 }
 
-func (c *debugClient) QueryServer(ctx context.Context, in *empty.Empty, opts ...grpc.CallOption) (*ServerInfo, error) {
+func (c *debugClient) QueryServer(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ServerInfo, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ServerInfo)
 	err := c.cc.Invoke(ctx, Debug_QueryServer_FullMethodName, in, out, cOpts...)
@@ -55,7 +53,7 @@ func (c *debugClient) QueryServer(ctx context.Context, in *empty.Empty, opts ...
 // for forward compatibility.
 type DebugServer interface {
 	// Returns debug information about the server.
-	QueryServer(context.Context, *empty.Empty) (*ServerInfo, error)
+	QueryServer(context.Context, *Empty) (*ServerInfo, error)
 	mustEmbedUnimplementedDebugServer()
 }
 
@@ -66,7 +64,7 @@ type DebugServer interface {
 // pointer dereference when methods are called.
 type UnimplementedDebugServer struct{}
 
-func (UnimplementedDebugServer) QueryServer(context.Context, *empty.Empty) (*ServerInfo, error) {
+func (UnimplementedDebugServer) QueryServer(context.Context, *Empty) (*ServerInfo, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method QueryServer not implemented")
 }
 func (UnimplementedDebugServer) mustEmbedUnimplementedDebugServer() {}
@@ -91,7 +89,7 @@ func RegisterDebugServer(s grpc.ServiceRegistrar, srv DebugServer) {
 }
 
 func _Debug_QueryServer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(empty.Empty)
+	in := new(Empty)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -103,7 +101,7 @@ func _Debug_QueryServer_Handler(srv interface{}, ctx context.Context, dec func(i
 		FullMethod: Debug_QueryServer_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DebugServer).QueryServer(ctx, req.(*empty.Empty))
+		return srv.(DebugServer).QueryServer(ctx, req.(*Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
