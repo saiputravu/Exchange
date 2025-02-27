@@ -21,13 +21,16 @@
               default = pkgs.mkShell {
                 buildInputs = with pkgs;
                   [
+                    zsh
+
                     go 
                     gopls
 
                     protobuf
                   ];
                 shellHook = ''
-                  export PS1="[nix@fenrir] \W § "
+                  export SHELL=${pkgs.zsh}/bin/zsh
+                  exec ${pkgs.zsh}/bin/zsh --login
                 '';
               };
             }
