@@ -29,8 +29,10 @@
                     protobuf
                   ];
                 shellHook = ''
-                  export SHELL=${pkgs.zsh}/bin/zsh
-                  exec ${pkgs.zsh}/bin/zsh --login
+                    export PATH=${pkgs.zsh}/bin:$PATH
+                    export SHELL=${pkgs.zsh}/bin/zsh
+                    export NIX_FLAKE_PROMPT="(fenrir)"  # Change this per flake!
+                    exec ${pkgs.zsh}/bin/zsh --login
                 '';
               };
             }
