@@ -19,5 +19,3 @@ var productName = map[Product]string{
 func (p Product) String() string {
 	return productName[p]
 }
-
-// prices[product] = [1.0, 2.0]
