@@ -20,4 +20,9 @@ type Order struct {
 	product string
 	time    time.Time
 	id      uint64
+	sender  uint64
+}
+
+type PeggedOrder struct {
+	Order
 }
