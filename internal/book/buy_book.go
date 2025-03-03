@@ -1,35 +1,10 @@
-package order
-
-import (
-	"container/heap"
-)
-
-// NOTE: might want to compare with `Float` from `math/big`: more precise but slower
-// NOTE: unsure if want to store price in struct or DDD style array separately
-type Product struct {
-	uid    uint16
-	ticker string
-	price  float64
-}
-
-func (p Product) String() string {
-	return p.ticker
-}
-
-// Each product has a book: buy and sell orders
-type ProductBook struct {
-	buys  BuyBook
-	sells SellBook
-}
-
-// Our whole book is a collection of ProductBooks, indexed by Product ID
-type Book map[uint16]ProductBook
+package book
 
 type BuyBook []*Order
-type SellBook []*Order
 
 func (book BuyBook) Len() int { return len(book) }
 
+// Ordering function for heap
 func (book BuyBook) Less(a, b Order) bool {
 	if a.price == b.price {
 		return a.time.Nanosecond() < b.time.Nanosecond() // Time should be smallest (earliest) first

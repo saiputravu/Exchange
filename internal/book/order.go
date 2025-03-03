@@ -1,4 +1,4 @@
-package order
+package book
 
 import (
 	"time"

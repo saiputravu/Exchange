@@ -27,6 +27,8 @@
                     gopls
 
                     protobuf
+
+                    tree
                   ];
                 shellHook = ''
                     export PATH=${pkgs.zsh}/bin:$PATH
