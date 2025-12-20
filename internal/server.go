@@ -2,29 +2,32 @@ package server
 
 import (
 	"context"
+	"fenrir/internal/protocol"
 	"fmt"
 	"time"
 )
 
 type Server struct {
-	ctx    context.Context
-	cancel context.CancelFunc
+	*protocol.UnimplementedDebugServer
 }
 
-func Create(ctx context.Context, cancel context.CancelFunc) Server {
-	return Server{ctx, cancel}
+func New() *Server {
+	return &Server{}
 }
 
-// Destroys the server context, and signals to running routines to issue a cleanup.
 func (s *Server) Shutdown() {
-	s.cancel()
 }
 
-func (s *Server) Run() {
+func (s *Server) Run(ctx context.Context) {
 	i := 0
 	for {
-		fmt.Println("Fenrir server alive for", i, "seconds")
-		time.Sleep(time.Second)
-		i++
+		select {
+		case <-ctx.Done():
+			s.Shutdown()
+		default:
+			fmt.Println("Fenrir server alive for", i, "seconds")
+			time.Sleep(time.Second)
+			i++
+		}
 	}
 }

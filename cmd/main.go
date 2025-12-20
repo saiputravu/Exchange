@@ -2,17 +2,14 @@ package main
 
 import (
 	"context"
-
 	server "fenrir/internal"
 )
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
-	srv := server.Create(ctx, cancel)
+	defer cancel()
+	srv := server.New()
 
-	// Startup the server.
-	go srv.Run()
-
-	// Wait until the context is finished.
-	<-ctx.Done()
+	// Block on running the server.
+	srv.Run(ctx)
 }
