@@ -1,9 +1,10 @@
-package server
+package net
 
 type MessageType int
 
 const (
-	Limit MessageType = iota
+	Heartbeat MessageType = iota
+	Limit
 )
 
 type Message struct {
@@ -14,5 +15,5 @@ type Message struct {
 
 func parseMessage(msg []byte) (Message, error) {
 	// FIXME: Implement this.
-	return Message{typeOf: Limit, field: string(msg)}, nil
+	return Message{typeOf: Heartbeat, field: string(msg)}, nil
 }

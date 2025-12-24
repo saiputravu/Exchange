@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	server "fenrir/internal"
+	"fenrir/internal/net"
 	"os/signal"
 	"syscall"
 )
@@ -15,7 +15,7 @@ func main() {
 	)
 	defer stop()
 
-	srv := server.New("0.0.0.0", 9001)
+	srv := net.New("0.0.0.0", 9001)
 	go srv.Run(ctx)
 
 	// Block on running the server.

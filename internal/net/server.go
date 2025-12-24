@@ -1,8 +1,9 @@
-package server
+package net
 
 import (
 	"context"
 	"errors"
+	"fenrir/internal/utils"
 	"fmt"
 	"net"
 	"sync"
@@ -37,8 +38,7 @@ type ClientMessage struct {
 type Server struct {
 	address            string
 	port               int
-	listenConfig       net.ListenConfig
-	pool               WorkerPool
+	pool               utils.WorkerPool
 	cancel             context.CancelFunc
 	clientSessions     map[string]ClientSession
 	clientSessionsLock sync.Mutex
@@ -49,7 +49,7 @@ func New(address string, port int) *Server {
 	return &Server{
 		address:        address,
 		port:           port,
-		pool:           NewWorkerPool(defaultNWorkers),
+		pool:           utils.NewWorkerPool(defaultNWorkers),
 		clientSessions: make(map[string]ClientSession),
 		clientMessages: make(chan ClientMessage, 1),
 	}
@@ -114,7 +114,7 @@ func (s *Server) Run(ctx context.Context) {
 			s.addClientSession(conn)
 
 			// Pass over the connection to be read from.
-			s.pool.tasks <- conn
+			s.pool.AddTask(conn)
 		}
 	}
 }
@@ -142,27 +142,32 @@ func (s *Server) sessionHandler(t *tomb.Tomb) error {
 // dies, the client session is cleaned up.
 // Note, any error returned from here is fatal.
 func (s *Server) handleConnection(t *tomb.Tomb, task any) error {
-	log.Info().Msg("handling connection")
 	conn, ok := task.(net.Conn)
 	if !ok {
 		return ErrImproperConversion
 	}
 
-	// Set max read timeout.
-	conn.SetDeadline(time.Now().Add(defaultConnTimeout))
-
 	defer func() {
 		if err := conn.Close(); err != nil {
-			log.Error().Err(err)
+			log.Error().Str("address", conn.LocalAddr().String()).Err(err)
 		}
 	}()
+
+	// Set max read timeout.
+	err := conn.SetDeadline(time.Now().Add(defaultConnTimeout))
+	if err != nil {
+		log.Error().
+			Str("address", conn.LocalAddr().Network()).
+			Err(err).
+			Msg("failed setting deadline for connection")
+		return nil
+	}
 
 	buffer := make([]byte, MAX_RECV_SIZE)
 	select {
 	case <-t.Dying():
 		return nil
 	default:
-		log.Info().Msg("reading message")
 		n, err := conn.Read(buffer)
 		if err != nil {
 			log.Error().
@@ -193,7 +198,7 @@ func (s *Server) handleConnection(t *tomb.Tomb, task any) error {
 		}
 
 		// Push the client connection back to handle the next message.
-		s.pool.tasks <- conn
+		s.pool.AddTask(conn)
 	}
 	return nil
 }

@@ -1,4 +1,4 @@
-package server
+package utils
 
 import (
 	"github.com/rs/zerolog/log"
@@ -11,9 +11,8 @@ const (
 
 type WorkerFunction = func(t *tomb.Tomb, task any) error
 type WorkerPool struct {
-	n     int            // number of workers
-	tasks chan any       // task connection pool
-	work  WorkerFunction // do work method
+	n     int      // number of workers
+	tasks chan any // task connection pool
 }
 
 func NewWorkerPool(size int) WorkerPool {
@@ -44,9 +43,13 @@ func (pool *WorkerPool) Setup(t *tomb.Tomb, work WorkerFunction) {
 	}
 }
 
+// AddTask adds task to task buffer.
+func (pool *WorkerPool) AddTask(task any) {
+	pool.tasks <- task
+}
+
 // Workers wait on tasks in the task connection pool and action them.
 func (pool *WorkerPool) worker(t *tomb.Tomb, work WorkerFunction) error {
-	log.Info().Msg("worker starting")
 	select {
 	case <-t.Dying():
 		return nil
