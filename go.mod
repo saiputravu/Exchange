@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/rs/zerolog v1.34.0
+	github.com/tidwall/btree v1.8.1
 	gopkg.in/tomb.v2 v2.0.0-20161208151619-d5d1b5820637
 )
 
