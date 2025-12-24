@@ -35,7 +35,9 @@ type ClientMessage struct {
 }
 
 type Server struct {
-	listener           net.Listener
+	address            string
+	port               int
+	listenConfig       net.ListenConfig
 	pool               WorkerPool
 	cancel             context.CancelFunc
 	clientSessions     map[string]ClientSession
@@ -43,54 +45,68 @@ type Server struct {
 	clientMessages     chan (ClientMessage)
 }
 
-func New(address string, port int) (*Server, error) {
-	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", address, port))
-	if err != nil {
-		return nil, err
-	}
-	pool := NewWorkerPool(defaultNWorkers)
+func New(address string, port int) *Server {
 	return &Server{
-		listener: listener,
-		pool:     pool,
-	}, nil
+		address:        address,
+		port:           port,
+		pool:           NewWorkerPool(defaultNWorkers),
+		clientSessions: make(map[string]ClientSession),
+		clientMessages: make(chan ClientMessage, 1),
+	}
 }
 
 func (s *Server) Shutdown() {
 	log.Info().Msg("server shutting down")
-	if err := s.listener.Close(); err != nil {
-		log.Error().Err(err).Msg("unable to close listener")
-	}
 	s.cancel()
 }
 
 func (s *Server) Run(ctx context.Context) {
+	defer s.Shutdown()
+
 	// Setup a cancel on the context for future shutdown.
 	ctx, s.cancel = context.WithCancel(ctx)
-	defer s.cancel()
+	t, ctx := tomb.WithContext(ctx)
+
+	// Start a tcp listener.
+	var lc net.ListenConfig
+	listener, err := lc.Listen(ctx, "tcp", fmt.Sprintf("%s:%d", s.address, s.port))
+	if err != nil {
+		log.Error().Err(err).Msg("unable to start listener")
+		return
+	}
+	defer func() {
+		if err := listener.Close(); err != nil {
+			log.Error().Err(err).Msg("unable to close listener")
+		}
+	}()
 
 	// Start the worker pool.
-	t, ctx := tomb.WithContext(ctx)
-	s.pool.Setup(t, s.handleConnection)
+	t.Go(func() error {
+		s.pool.Setup(t, s.handleConnection)
+		return nil
+	})
 
 	// Start the session handler.
 	t.Go(func() error {
 		return s.sessionHandler(t)
 	})
 
+	log.Info().Msg("server running")
+
 	// Start accepting connections.
 	for {
 		select {
 		case <-ctx.Done():
-			s.Shutdown()
 			return
 		default:
-			log.Debug().Msg("listening for new client connections")
-			conn, err := s.listener.Accept()
+			log.Info().Msg("listening for new client connections")
+			conn, err := listener.Accept()
 			if err != nil {
 				log.Error().Err(err).Msg("error accepting client")
+				continue
 			}
 
-			log.Debug().
+			log.Info().
 				Str("address", conn.LocalAddr().String()).
 				Msg("new client added")
 			// Add the client to client sessions we are tracking.
@@ -112,7 +128,10 @@ func (s *Server) sessionHandler(t *tomb.Tomb) error {
 			return nil
 		case message := <-s.clientMessages:
 			// FIXME: implement this.
-			log.Info().Any("message", message).Msg("new message")
+			log.Info().
+				Int("message type", int(message.message.typeOf)).
+				Str("msg", message.message.field).
+				Msg("new message")
 		}
 	}
 }
@@ -121,7 +140,9 @@ func (s *Server) sessionHandler(t *tomb.Tomb) error {
 // the next message off the connection, parses and passes it
 // forward to sessionHandler to handle it. If the connection
 // dies, the client session is cleaned up.
+// Note, any error returned from here is fatal.
 func (s *Server) handleConnection(t *tomb.Tomb, task any) error {
+	log.Info().Msg("handling connection")
 	conn, ok := task.(net.Conn)
 	if !ok {
 		return ErrImproperConversion
@@ -141,6 +162,7 @@ func (s *Server) handleConnection(t *tomb.Tomb, task any) error {
 	case <-t.Dying():
 		return nil
 	default:
+		log.Info().Msg("reading message")
 		n, err := conn.Read(buffer)
 		if err != nil {
 			log.Error().
@@ -152,6 +174,7 @@ func (s *Server) handleConnection(t *tomb.Tomb, task any) error {
 			// has exited. Clean up the client session.
 			// TODO: Should handle this properly and check for graceful EOF.
 			s.deleteClientSession(conn.LocalAddr().String())
+			return nil
 		}
 
 		message, err := parseMessage(buffer[:n])

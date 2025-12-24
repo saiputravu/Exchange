@@ -5,8 +5,6 @@ import (
 	server "fenrir/internal"
 	"os/signal"
 	"syscall"
-
-	"github.com/rs/zerolog/log"
 )
 
 func main() {
@@ -17,12 +15,9 @@ func main() {
 	)
 	defer stop()
 
-	srv, err := server.New("0.0.0.0", 9001)
-	if err != nil {
-		log.Fatal().Err(err).Msg("server startup failed")
-	}
-	log.Info().Msg("server started up")
+	srv := server.New("0.0.0.0", 9001)
+	go srv.Run(ctx)
 
 	// Block on running the server.
-	srv.Run(ctx)
+	<-ctx.Done()
 }

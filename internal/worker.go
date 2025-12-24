@@ -16,14 +16,16 @@ type WorkerPool struct {
 	work  WorkerFunction // do work method
 }
 
-func NewWorkerPool(size uint) WorkerPool {
+func NewWorkerPool(size int) WorkerPool {
 	return WorkerPool{
 		tasks: make(chan any, TASK_CHAN_SIZE),
+		n:     size,
 	}
 }
 
 func (pool *WorkerPool) Setup(t *tomb.Tomb, work WorkerFunction) {
 	// Maintain a full pool of workers.
+	log.Info().Int("activeWorkers", pool.n).Msg("adding workers")
 	activeWorkers := 0
 	for {
 		select {
@@ -32,7 +34,7 @@ func (pool *WorkerPool) Setup(t *tomb.Tomb, work WorkerFunction) {
 		default:
 			if activeWorkers < pool.n {
 				t.Go(func() error {
-					err := pool.worker(t, activeWorkers, work)
+					err := pool.worker(t, work)
 					activeWorkers--
 					return err
 				})
@@ -43,10 +45,14 @@ func (pool *WorkerPool) Setup(t *tomb.Tomb, work WorkerFunction) {
 }
 
 // Workers wait on tasks in the task connection pool and action them.
-func (pool *WorkerPool) worker(t *tomb.Tomb, id int, work WorkerFunction) error {
-	for task := range pool.tasks {
+func (pool *WorkerPool) worker(t *tomb.Tomb, work WorkerFunction) error {
+	log.Info().Msg("worker starting")
+	select {
+	case <-t.Dying():
+		return nil
+	case task := <-pool.tasks:
 		if err := work(t, task); err != nil {
-			log.Error().Err(err).Int("id", id).Msg("worker exiting")
+			log.Error().Err(err).Msg("worker exiting")
 			return err
 		}
 	}
