@@ -20,12 +20,12 @@ func New(supportedAssets ...AssetType) *Engine {
 	return engine
 }
 
-func (engine *Engine) AddOrder(order Order) {
+func (engine *Engine) PlaceOrder(order Order) {
 }
 
 // Match sanity checks before firing an execution report to the
 // counterparty and logging an internal trade.
-func (engine *Engine) Match(order, counter *Order, quantity uint64) {
+func (engine *Engine) Trade(taker, maker *Order, quantity uint64) {
 	// FIXME: Fire an execution report when the reporting is setup
 	//        Do this to both parties.
 	// FIXME: Log an internal trade, once the historical data ingestion
