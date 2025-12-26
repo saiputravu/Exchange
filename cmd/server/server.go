@@ -18,10 +18,9 @@ func main() {
 	defer stop()
 
 	// Setup the TCP server and the matching engine.
-	var srv *net.Server
-	var eng *engine.Engine
-	eng = engine.New(srv, common.Equities)
-	srv = net.New("0.0.0.0", 9001, eng)
+	eng := engine.New(common.Equities)
+	srv := net.New("0.0.0.0", 9001, eng)
+	eng.SetReporter(srv)
 
 	go srv.Run(ctx)
 	// Block on running the server.

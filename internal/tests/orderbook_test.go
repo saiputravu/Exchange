@@ -21,7 +21,8 @@ func (r *MockReporter) ReportError(client string, err error) error {
 }
 
 func createTestOrderBook() *engine.OrderBook {
-	eng := engine.New(&MockReporter{}, Equities)
+	eng := engine.New(Equities)
+	eng.SetReporter(&MockReporter{})
 	book := eng.Books[Equities]
 	return &book
 }
@@ -54,36 +55,8 @@ func newQuantity(quantity uint64) Quantity {
 	return Quantity{quantity, quantity}
 }
 
-type FlatPriceLevel struct {
-	PriceLevel float64
-	Orders     []*Order
-}
-
-// flattenLevels converts the complex BTree structure into a simple slice
-// so we can use assert.Equal easily.
-func flattenLevels(levels []*engine.PriceLevel) []FlatPriceLevel {
-	var out []FlatPriceLevel
-	for _, lvl := range levels {
-		var orders []*Order
-		lvl.Orders.Scan(func(item *Order) bool {
-			// Copy out the order so to not affect true value which will mess with
-			// ordering.
-			// Zero out timestamps for strict equality checking in tests
-			order := *item
-			order.ExchTimestamp = time.Time{}
-			orders = append(orders, &order)
-			return true
-		})
-		out = append(out, FlatPriceLevel{
-			PriceLevel: lvl.PriceLevel,
-			Orders:     orders,
-		})
-	}
-	return out
-}
-
 // buildExpectedLevel constructs the expected PriceLevel struct to compare against.
-func buildExpectedLevel(price float64, side Side, quantities ...Quantity) FlatPriceLevel {
+func buildExpectedLevel(price float64, side Side, quantities ...Quantity) engine.FlatPriceLevel {
 	orders := make([]*Order, len(quantities))
 	for i, qty := range quantities {
 		orders[i] = &Order{
@@ -95,7 +68,7 @@ func buildExpectedLevel(price float64, side Side, quantities ...Quantity) FlatPr
 			TotalQuantity: qty.totalQuantity,
 		}
 	}
-	return FlatPriceLevel{
+	return engine.FlatPriceLevel{
 		PriceLevel: price,
 		Orders:     orders,
 	}
@@ -111,13 +84,13 @@ func TestPlaceOrder_Limit(t *testing.T) {
 	assert.NoError(t, placeTestOrders(book, 100.0, Sell, 100, 90, 80))
 
 	// 2. Define Expectations
-	expectedAsks := []FlatPriceLevel{
+	expectedAsks := []engine.FlatPriceLevel{
 		buildExpectedLevel(
 			100.0, Sell, newQuantity(100), newQuantity(90), newQuantity(80),
 		),
 	}
 
-	expectedBids := []FlatPriceLevel{
+	expectedBids := []engine.FlatPriceLevel{
 		buildExpectedLevel(
 			99.0, Buy, newQuantity(100), newQuantity(90), newQuantity(80),
 		),
@@ -125,8 +98,8 @@ func TestPlaceOrder_Limit(t *testing.T) {
 
 	// 3. Assertions
 	// Note: book.Bids.Items() and book.Asks.Items() are assumed to return []*engine.PriceLevel
-	assert.Equal(t, expectedAsks, flattenLevels(book.Asks.Items()))
-	assert.Equal(t, expectedBids, flattenLevels(book.Bids.Items()))
+	assert.Equal(t, expectedAsks, engine.FlattenLevels(book.Asks.Items()))
+	assert.Equal(t, expectedBids, engine.FlattenLevels(book.Bids.Items()))
 }
 
 func TestPlaceOrder_Limit_MultipleLevels_WithMatch(t *testing.T) {
@@ -141,12 +114,12 @@ func TestPlaceOrder_Limit_MultipleLevels_WithMatch(t *testing.T) {
 	assert.NoError(t, placeTestOrders(book, 101.0, Sell, 20))
 
 	// 3. Define Expectations
-	expectedAsks := []FlatPriceLevel{
+	expectedAsks := []engine.FlatPriceLevel{
 		buildExpectedLevel(100.0, Sell, newQuantity(100), newQuantity(90)),
 		buildExpectedLevel(101.0, Sell, newQuantity(20)),
 	}
 
-	expectedBids := []FlatPriceLevel{
+	expectedBids := []engine.FlatPriceLevel{
 		buildExpectedLevel(
 			99.0, Buy, newQuantity(100), newQuantity(90), newQuantity(80),
 		),
@@ -155,24 +128,24 @@ func TestPlaceOrder_Limit_MultipleLevels_WithMatch(t *testing.T) {
 
 	// 4. Assertions
 	// Validates that the engine correctly sorts levels based on price priority
-	assert.Equal(t, expectedAsks, flattenLevels(book.Asks.Items()), "Asks should be sorted Low -> High")
-	assert.Equal(t, expectedBids, flattenLevels(book.Bids.Items()), "Bids should be sorted High -> Low")
+	assert.Equal(t, expectedAsks, engine.FlattenLevels(book.Asks.Items()), "Asks should be sorted Low -> High")
+	assert.Equal(t, expectedBids, engine.FlattenLevels(book.Bids.Items()), "Bids should be sorted High -> Low")
 
 	// 5. Check complete match.
 	assert.NoError(t, placeTestOrders(book, 100.0, Buy, 100))
-	expectedAsks = []FlatPriceLevel{
+	expectedAsks = []engine.FlatPriceLevel{
 		buildExpectedLevel(100.0, Sell, newQuantity(90)),
 		buildExpectedLevel(101.0, Sell, newQuantity(20)),
 	}
-	assert.Equal(t, expectedAsks, flattenLevels(book.Asks.Items()), "Asks should be sorted Low -> High")
+	assert.Equal(t, expectedAsks, engine.FlattenLevels(book.Asks.Items()), "Asks should be sorted Low -> High")
 
 	// 6. Check partial match.
 	assert.NoError(t, placeTestOrders(book, 100.0, Buy, 20))
-	expectedAsks = []FlatPriceLevel{
+	expectedAsks = []engine.FlatPriceLevel{
 		buildExpectedLevel(100.0, Sell, Quantity{70, 90}),
 		buildExpectedLevel(101.0, Sell, newQuantity(20)),
 	}
-	assert.Equal(t, expectedAsks, flattenLevels(book.Asks.Items()), "Asks should be sorted Low -> High")
+	assert.Equal(t, expectedAsks, engine.FlattenLevels(book.Asks.Items()), "Asks should be sorted Low -> High")
 }
 
 func TestPlaceOrder_Limit_MultipleLevels_WithMatchSweep_Bid(t *testing.T) {
@@ -187,12 +160,12 @@ func TestPlaceOrder_Limit_MultipleLevels_WithMatchSweep_Bid(t *testing.T) {
 	assert.NoError(t, placeTestOrders(book, 101.0, Sell, 20))
 
 	// 3. Define Expectations
-	expectedAsks := []FlatPriceLevel{
+	expectedAsks := []engine.FlatPriceLevel{
 		buildExpectedLevel(100.0, Sell, newQuantity(100), newQuantity(90)),
 		buildExpectedLevel(101.0, Sell, newQuantity(20)),
 	}
 
-	expectedBids := []FlatPriceLevel{
+	expectedBids := []engine.FlatPriceLevel{
 		buildExpectedLevel(
 			99.0, Buy, newQuantity(100), newQuantity(90), newQuantity(80),
 		),
@@ -201,23 +174,23 @@ func TestPlaceOrder_Limit_MultipleLevels_WithMatchSweep_Bid(t *testing.T) {
 
 	// 4. Assertions
 	// Validates that the engine correctly sorts levels based on price priority
-	assert.Equal(t, expectedAsks, flattenLevels(book.Asks.Items()), "Asks should be sorted Low -> High")
-	assert.Equal(t, expectedBids, flattenLevels(book.Bids.Items()), "Bids should be sorted High -> Low")
+	assert.Equal(t, expectedAsks, engine.FlattenLevels(book.Asks.Items()), "Asks should be sorted Low -> High")
+	assert.Equal(t, expectedBids, engine.FlattenLevels(book.Bids.Items()), "Bids should be sorted High -> Low")
 
 	// 5. Check sweep match.
 	assert.NoError(t, placeTestOrders(book, 100.0, Buy, 120))
-	expectedAsks = []FlatPriceLevel{
+	expectedAsks = []engine.FlatPriceLevel{
 		buildExpectedLevel(100.0, Sell, Quantity{70, 90}),
 		buildExpectedLevel(101.0, Sell, newQuantity(20)),
 	}
-	assert.Equal(t, expectedAsks, flattenLevels(book.Asks.Items()), "Asks should be sorted Low -> High")
+	assert.Equal(t, expectedAsks, engine.FlattenLevels(book.Asks.Items()), "Asks should be sorted Low -> High")
 
 	// 6. Check multi-level sweep with a deep into the book order (100.0, 101.0).
 	assert.NoError(t, placeTestOrders(book, 103.0, Buy, 80))
-	expectedAsks = []FlatPriceLevel{
+	expectedAsks = []engine.FlatPriceLevel{
 		buildExpectedLevel(101.0, Sell, Quantity{10, 20}),
 	}
-	assert.Equal(t, expectedAsks, flattenLevels(book.Asks.Items()), "Asks should be sorted Low -> High")
+	assert.Equal(t, expectedAsks, engine.FlattenLevels(book.Asks.Items()), "Asks should be sorted Low -> High")
 }
 
 func TestPlaceOrder_Limit_MultipleLevels_WithMatchSweep_Ask(t *testing.T) {
@@ -232,12 +205,12 @@ func TestPlaceOrder_Limit_MultipleLevels_WithMatchSweep_Ask(t *testing.T) {
 	assert.NoError(t, placeTestOrders(book, 101.0, Sell, 20))
 
 	// 3. Define Expectations
-	expectedAsks := []FlatPriceLevel{
+	expectedAsks := []engine.FlatPriceLevel{
 		buildExpectedLevel(100.0, Sell, newQuantity(100), newQuantity(90)),
 		buildExpectedLevel(101.0, Sell, newQuantity(20)),
 	}
 
-	expectedBids := []FlatPriceLevel{
+	expectedBids := []engine.FlatPriceLevel{
 		buildExpectedLevel(
 			99.0, Buy, newQuantity(100), newQuantity(90), newQuantity(80),
 		),
@@ -246,13 +219,13 @@ func TestPlaceOrder_Limit_MultipleLevels_WithMatchSweep_Ask(t *testing.T) {
 
 	// 4. Assertions
 	// Validates that the engine correctly sorts levels based on price priority
-	assert.Equal(t, expectedAsks, flattenLevels(book.Asks.Items()), "Asks should be sorted Low -> High")
-	assert.Equal(t, expectedBids, flattenLevels(book.Bids.Items()), "Bids should be sorted High -> Low")
+	assert.Equal(t, expectedAsks, engine.FlattenLevels(book.Asks.Items()), "Asks should be sorted Low -> High")
+	assert.Equal(t, expectedBids, engine.FlattenLevels(book.Bids.Items()), "Bids should be sorted High -> Low")
 
 	// 5. Check sweep match.
 	assert.NoError(t, placeTestOrders(book, 96.0, Sell, 310))
-	expectedBids = []FlatPriceLevel{
+	expectedBids = []engine.FlatPriceLevel{
 		buildExpectedLevel(98.0, Buy, Quantity{10, 50}),
 	}
-	assert.Equal(t, expectedBids, flattenLevels(book.Bids.Items()), "Asks should be sorted Low -> High")
+	assert.Equal(t, expectedBids, engine.FlattenLevels(book.Bids.Items()), "Asks should be sorted Low -> High")
 }

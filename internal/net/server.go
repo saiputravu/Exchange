@@ -42,6 +42,7 @@ type ClientMessage struct {
 type Engine interface {
 	PlaceOrder(assetType AssetType, order Order) error
 	CancelOrder(assetType AssetType, uuid string) error
+	LogBook()
 }
 
 type Server struct {
@@ -212,15 +213,36 @@ func (s *Server) handleMessage(message ClientMessage) error {
 		if err != nil {
 			return err
 		}
-		s.engine.PlaceOrder(order.AssetType, ord)
+		err = s.engine.PlaceOrder(order.AssetType, ord)
+		if err != nil {
+			s.ReportError(message.clientAddress, err)
+			log.Error().
+				Err(err).
+				Str("clientAddress", message.clientAddress).
+				Msg("error while placing order")
+		}
 	case CancelOrder:
 		// TODO: Implement
 		order, ok := message.message.(CancelOrderMessage)
 		if !ok {
 			return ErrInvalidMessageType
 		}
-		s.engine.CancelOrder(order.AssetType, order.OrderUUID)
+		err := s.engine.CancelOrder(order.AssetType, order.OrderUUID)
+		if err != nil {
+			s.ReportError(message.clientAddress, err)
+			log.Error().
+				Err(err).
+				Str("clientAddress", message.clientAddress).
+				Str("uuid", order.OrderUUID).
+				Msg("error while cancelling order")
+		}
+	case LogBook:
+		s.engine.LogBook()
 	default:
+		log.Error().
+			Int("messageType", int(message.message.GetType())).
+			Any("message", message).
+			Msg("invalid message type")
 		return ErrInvalidMessageType
 	}
 	return nil

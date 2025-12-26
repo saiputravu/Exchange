@@ -4,6 +4,8 @@ import (
 	"errors"
 	. "fenrir/internal/common"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -23,10 +25,9 @@ type Engine struct {
 	reporter Reporter
 }
 
-func New(reporter Reporter, supportedAssets ...AssetType) *Engine {
+func New(supportedAssets ...AssetType) *Engine {
 	engine := &Engine{
-		Books:    make(map[AssetType]OrderBook),
-		reporter: reporter,
+		Books: make(map[AssetType]OrderBook),
 	}
 
 	for assetType := range supportedAssets {
@@ -34,6 +35,10 @@ func New(reporter Reporter, supportedAssets ...AssetType) *Engine {
 	}
 
 	return engine
+}
+
+func (engine *Engine) SetReporter(reporter Reporter) {
+	engine.reporter = reporter
 }
 
 func (engine *Engine) PlaceOrder(assetType AssetType, order Order) error {
@@ -75,4 +80,16 @@ func (engine *Engine) DoTrade(taker, maker *Order, price float64, quantity uint6
 	// TODO: Think about persistance but I cba right now.
 	engine.Trades = append(engine.Trades, trade)
 	return nil
+}
+
+func (engine *Engine) LogBook() {
+	for asset, book := range engine.Books {
+		bids := FlattenLevels(book.Bids.Items())
+		asks := FlattenLevels(book.Asks.Items())
+		log.Info().
+			Int("asset", int(asset)).
+			Any("bids", bids).
+			Any("asks", asks).
+			Msg("")
+	}
 }

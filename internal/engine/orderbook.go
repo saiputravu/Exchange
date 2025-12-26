@@ -91,6 +91,34 @@ func (book *OrderBook) CancelOrder(uuid string) error {
 	return nil
 }
 
+type FlatPriceLevel struct {
+	PriceLevel float64
+	Orders     []*Order
+}
+
+// flattenLevels converts the complex BTree structure into a simple slice
+// so we can use assert.Equal easily.
+func FlattenLevels(levels []*PriceLevel) []FlatPriceLevel {
+	var out []FlatPriceLevel
+	for _, lvl := range levels {
+		var orders []*Order
+		lvl.Orders.Scan(func(item *Order) bool {
+			// Copy out the order so to not affect true value which will mess with
+			// ordering.
+			// Zero out timestamps for strict equality checking in tests
+			order := *item
+			order.ExchTimestamp = time.Time{}
+			orders = append(orders, &order)
+			return true
+		})
+		out = append(out, FlatPriceLevel{
+			PriceLevel: lvl.PriceLevel,
+			Orders:     orders,
+		})
+	}
+	return out
+}
+
 // Match consumes the top of book price levels while they cross (i.e., bid >= ask).
 // While these orders cross, we match orders in price-time-priority.
 //
@@ -104,6 +132,7 @@ func (book *OrderBook) CancelOrder(uuid string) error {
 func (book *OrderBook) Match() error {
 	// Consume crossing orders. This will essentially be our latest order sweeping
 	// across priceLevels as far as its depth and liquidity go.
+	var errs []error
 	for {
 		bestBid, bidOk := book.Bids.MinMut()
 		bestAsk, askOk := book.Asks.MinMut()
@@ -131,11 +160,11 @@ func (book *OrderBook) Match() error {
 			// The price is matched at maker's price level.
 			if askOrder.ExchTimestamp.After(bidOrder.ExchTimestamp) {
 				if err := book.engine.DoTrade(askOrder, bidOrder, bestBid.PriceLevel, matchQty); err != nil {
-					return err
+					errs = append(errs, err)
 				}
 			} else {
 				if err := book.engine.DoTrade(bidOrder, askOrder, bestAsk.PriceLevel, matchQty); err != nil {
-					return err
+					errs = append(errs, err)
 				}
 			}
 
@@ -155,6 +184,10 @@ func (book *OrderBook) Match() error {
 		if bestBid.Orders.Len() == 0 {
 			book.Bids.Delete(bestBid)
 		}
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 	return nil
 }
@@ -254,16 +287,6 @@ func (book *OrderBook) handleLimit(order Order) error {
 	// Levels comparator only accounts for price levels, so we create a dummy price
 	// level for the search.
 	level, ok := levels.GetMut(&PriceLevel{PriceLevel: order.LimitPrice})
-	// if ok {
-	// 	// If the price level already exists, just append onto the existing orders.
-	// 	level.Orders = append(level.Orders, &order)
-	// } else {
-	// 	// Otherwise, if the price level does not exist, create the price level.
-	// 	levels.Set(&PriceLevel{
-	// 		PriceLevel: order.LimitPrice,
-	// 		Orders:     []*Order{&order},
-	// 	})
-	// }
 	if !ok {
 		level = &PriceLevel{
 			PriceLevel: order.LimitPrice,

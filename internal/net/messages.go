@@ -23,6 +23,8 @@ const (
 	Heartbeat MessageType = iota
 	NewOrder
 	CancelOrder
+	// Debug Messages
+	LogBook
 )
 
 type ReportMessageType int
@@ -52,6 +54,10 @@ func (m BaseMessage) GetType() MessageType {
 	return m.TypeOf
 }
 
+type LogBookMessage struct {
+	BaseMessage
+}
+
 func parseMessage(msg []byte) (Message, error) {
 	if len(msg) < BaseMessageHeaderLen {
 		return BaseMessage{}, errors.New("message too short to contain header")
@@ -64,6 +70,8 @@ func parseMessage(msg []byte) (Message, error) {
 		return parseNewOrder(msg)
 	case CancelOrder:
 		return parseCancelOrder(msg)
+	case LogBook:
+		return LogBookMessage{BaseMessage{TypeOf: LogBook}}, nil
 	default:
 		return BaseMessage{}, ErrInvalidMessageType
 	}
@@ -88,14 +96,16 @@ func (o *NewOrderMessage) Order() (Order, error) {
 	}
 
 	return Order{
-		UUID:       orderUUID,
-		AssetType:  o.AssetType,
-		OrderType:  o.OrderType,
-		Ticker:     o.Ticker,
-		LimitPrice: o.LimitPrice,
-		Quantity:   o.Quantity,
-		Side:       o.Side,
-		Owner:      o.Username,
+		UUID:          orderUUID,
+		AssetType:     o.AssetType,
+		OrderType:     o.OrderType,
+		Ticker:        o.Ticker,
+		Side:          o.Side,
+		LimitPrice:    o.LimitPrice,
+		Quantity:      o.Quantity,
+		TotalQuantity: o.Quantity,
+		Timestamp:     time.Now(),
+		Owner:         o.Username,
 	}, nil
 }
 
@@ -158,6 +168,14 @@ const reportFixedHeaderLen = 1 + 1 + 1 + 8 + 8 + 8 + 2 + 4 + 4 + 16
 // Serialize converts the report to be sent on the wire.
 func (r *Report) Serialize() ([]byte, error) {
 	totalSize := reportFixedHeaderLen + len(r.Err) + len(r.Counterparty)
+
+	// Pad when unset
+	if len(r.Ticker) < 4 {
+		r.Ticker = "XXXX"
+	}
+	if len(r.UUID) < 4 {
+		r.UUID = "XXXXXXXXXXXXXXXX"
+	}
 
 	buf := make([]byte, totalSize)
 	buf[0] = byte(r.MessageType)
