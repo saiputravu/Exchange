@@ -87,6 +87,7 @@ func (book *OrderBook) PlaceOrder(order Order) error {
 }
 
 func (book *OrderBook) CancelOrder(uuid string) error {
+	// FIXME: implement this
 	return nil
 }
 

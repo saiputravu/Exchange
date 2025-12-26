@@ -37,9 +37,17 @@ type ClientMessage struct {
 	message       Message
 }
 
+// TODO: Maybe move this to common/
+// Engine is interface that provides access to order handling.
+type Engine interface {
+	PlaceOrder(assetType AssetType, order Order) error
+	CancelOrder(assetType AssetType, uuid string) error
+}
+
 type Server struct {
 	address            string
 	port               int
+	engine             Engine
 	pool               utils.WorkerPool
 	cancel             context.CancelFunc
 	clientSessions     map[string]ClientSession
@@ -47,10 +55,11 @@ type Server struct {
 	clientMessages     chan (ClientMessage)
 }
 
-func New(address string, port int) *Server {
+func New(address string, port int, engine Engine) *Server {
 	return &Server{
 		address:        address,
 		port:           port,
+		engine:         engine,
 		pool:           utils.NewWorkerPool(defaultNWorkers),
 		clientSessions: make(map[string]ClientSession),
 		clientMessages: make(chan ClientMessage, 1),
@@ -121,23 +130,54 @@ func (s *Server) Run(ctx context.Context) {
 	}
 }
 
-// FIXME: implement.
-func (s *Server) Report(clientAddress string, trade Trade) error {
+func (s *Server) ReportTrade(trade Trade, err error) error {
 	s.clientSessionsLock.Lock()
 	defer s.clientSessionsLock.Unlock()
+
+	partyReport, counterPartyReport, err := generateWireTradeReports(trade, err)
+	if err != nil {
+		return err
+	}
+
+	party, partyOk := s.clientSessions[trade.Party.Owner]
+	counterParty, counterPartyOk := s.clientSessions[trade.CounterParty.Owner]
+	if !partyOk || !counterPartyOk {
+		return ErrClientDoesNotExist
+	}
+
+	_, err = party.conn.Write(partyReport)
+	if err != nil {
+		delete(s.clientSessions, party.conn.LocalAddr().String())
+		return fmt.Errorf("unable to send report: %w", err)
+	}
+
+	_, err = party.conn.Write(counterPartyReport)
+	if err != nil {
+		delete(s.clientSessions, counterParty.conn.LocalAddr().String())
+		return fmt.Errorf("unable to send report: %w", err)
+	}
+	return nil
+}
+
+func (s *Server) ReportError(clientAddress string, err error) error {
+	s.clientSessionsLock.Lock()
+	defer s.clientSessionsLock.Unlock()
+
+	report, err := generateWireErrorReports(err)
+	if err != nil {
+		return err
+	}
 
 	client, ok := s.clientSessions[clientAddress]
 	if !ok {
 		return ErrClientDoesNotExist
 	}
 
-	// FIXME: Fix the encoding.
-	_, err := client.conn.Write([]byte(trade.String()))
+	_, err = client.conn.Write(report)
 	if err != nil {
 		delete(s.clientSessions, clientAddress)
 		return fmt.Errorf("unable to send report: %w", err)
 	}
-
 	return nil
 }
 
@@ -149,13 +189,41 @@ func (s *Server) sessionHandler(t *tomb.Tomb) error {
 		case <-t.Dying():
 			return nil
 		case message := <-s.clientMessages:
-			// FIXME: implement this.
-			log.Info().
-				Int("message type", int(message.message.typeOf)).
-				Str("msg", message.message.field).
-				Msg("new message")
+			if err := s.handleMessage(message); err != nil {
+				log.Error().
+					Err(err).
+					Str("clientAddress", message.clientAddress).
+					Msg("error handling message")
+				// Log the error back to the client
+				s.ReportError(message.clientAddress, err)
+			}
 		}
 	}
+}
+
+func (s *Server) handleMessage(message ClientMessage) error {
+	switch message.message.GetType() {
+	case NewOrder:
+		order, ok := message.message.(NewOrderMessage)
+		if !ok {
+			return ErrInvalidMessageType
+		}
+		ord, err := order.Order()
+		if err != nil {
+			return err
+		}
+		s.engine.PlaceOrder(order.AssetType, ord)
+	case CancelOrder:
+		// TODO: Implement
+		order, ok := message.message.(CancelOrderMessage)
+		if !ok {
+			return ErrInvalidMessageType
+		}
+		s.engine.CancelOrder(order.AssetType, order.OrderUUID)
+	default:
+		return ErrInvalidMessageType
+	}
+	return nil
 }
 
 // handleConnection is a short-lived worker method which reads the next message off the

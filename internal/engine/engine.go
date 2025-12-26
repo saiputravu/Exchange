@@ -12,7 +12,8 @@ var (
 
 // A reporter deals with passing a trade up to the respective owners.
 type Reporter interface {
-	Report(owner string, trade Trade) error
+	ReportTrade(trade Trade, err error) error
+	ReportError(client string, err error) error
 }
 
 // This is the main matchine engine.
@@ -64,10 +65,10 @@ func (engine *Engine) DoTrade(taker, maker *Order, price float64, quantity uint6
 		Price:        price,
 	}
 
-	if err := engine.reporter.Report(taker.Owner, trade); err != nil {
+	if err := engine.reporter.ReportTrade(trade, nil); err != nil {
 		return err
 	}
-	if err := engine.reporter.Report(maker.Owner, trade); err != nil {
+	if err := engine.reporter.ReportTrade(trade, nil); err != nil {
 		return err
 	}
 

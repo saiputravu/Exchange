@@ -12,7 +12,11 @@ import (
 
 type MockReporter struct{}
 
-func (r *MockReporter) Report(client string, trade Trade) error {
+func (r *MockReporter) ReportTrade(trade Trade, err error) error {
+	return nil
+}
+
+func (r *MockReporter) ReportError(client string, err error) error {
 	return nil
 }
 
