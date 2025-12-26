@@ -3,6 +3,7 @@ package net
 import (
 	"context"
 	"errors"
+	. "fenrir/internal/common"
 	"fenrir/internal/utils"
 	"fmt"
 	"net"
@@ -21,6 +22,7 @@ const (
 
 var (
 	ErrImproperConversion = errors.New("improper type conversion")
+	ErrClientDoesNotExist = errors.New("client does not exist")
 )
 
 // ClientSession contains relevant information pertaining to an individual
@@ -119,6 +121,26 @@ func (s *Server) Run(ctx context.Context) {
 	}
 }
 
+// FIXME: implement.
+func (s *Server) Report(clientAddress string, trade Trade) error {
+	s.clientSessionsLock.Lock()
+	defer s.clientSessionsLock.Unlock()
+
+	client, ok := s.clientSessions[clientAddress]
+	if !ok {
+		return ErrClientDoesNotExist
+	}
+
+	// FIXME: Fix the encoding.
+	_, err := client.conn.Write([]byte(trade.String()))
+	if err != nil {
+		delete(s.clientSessions, clientAddress)
+		return fmt.Errorf("unable to send report: %w", err)
+	}
+
+	return nil
+}
+
 // sessionHandler reads off incoming messages from clients and handles high-level
 // session logic. Messages are received from the pool of workers.
 func (s *Server) sessionHandler(t *tomb.Tomb) error {
@@ -136,10 +158,11 @@ func (s *Server) sessionHandler(t *tomb.Tomb) error {
 	}
 }
 
-// handleConnection is a short-lived worker method which reads
-// the next message off the connection, parses and passes it
-// forward to sessionHandler to handle it. If the connection
-// dies, the client session is cleaned up.
+// handleConnection is a short-lived worker method which reads the next message off the
+// connection, parses and passes it forward to sessionHandler to handle it. If the connection
+// dies, the client ssession is cleaned up. This method does not lock any client session
+// directly and gives up early if the connection is terminated. Therefore this method is
+// thread safe on map accesses.
 // Note, any error returned from here is fatal.
 func (s *Server) handleConnection(t *tomb.Tomb, task any) error {
 	conn, ok := task.(net.Conn)

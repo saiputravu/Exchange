@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/tidwall/btree"
+
+	. "fenrir/internal/common"
 )
 
 var (
@@ -12,9 +14,22 @@ var (
 	ErrRejection          = errors.New("order rejection")
 )
 
+// OrderAsc sorts orders by time priority (FIFO).
+// If timestamps are equal, it falls back to UUID for stability.
+func OrderAsc(a, b *Order) bool {
+	if a.ExchTimestamp.Before(b.ExchTimestamp) {
+		return true
+	}
+	if a.ExchTimestamp.After(b.ExchTimestamp) {
+		return false
+	}
+	return a.UUID < b.UUID
+}
+
 type PriceLevel struct {
 	PriceLevel float64
-	Orders     []*Order
+	Orders     *btree.BTreeG[*Order]
+	// Orders     []*Order
 }
 
 type PriceLevels = btree.BTreeG[*PriceLevel]
@@ -71,6 +86,10 @@ func (book *OrderBook) PlaceOrder(order Order) error {
 	return nil
 }
 
+func (book *OrderBook) CancelOrder(uuid string) error {
+	return nil
+}
+
 // Match consumes the top of book price levels while they cross (i.e., bid >= ask).
 // While these orders cross, we match orders in price-time-priority.
 //
@@ -95,9 +114,9 @@ func (book *OrderBook) Match() error {
 
 		// While there are still orders on either side, move forward on the orders.
 		var aIdx, bIdx int
-		for aIdx < len(bestAsk.Orders) && bIdx < len(bestBid.Orders) {
-			askOrder := bestAsk.Orders[aIdx]
-			bidOrder := bestBid.Orders[bIdx]
+		for aIdx < bestAsk.Orders.Len() && bIdx < bestBid.Orders.Len() {
+			askOrder, _ := bestAsk.Orders.MinMut()
+			bidOrder, _ := bestBid.Orders.MinMut()
 
 			matchQty := min(askOrder.Quantity, bidOrder.Quantity)
 			askOrder.Quantity -= matchQty
@@ -107,37 +126,32 @@ func (book *OrderBook) Match() error {
 			// received first. The earlier order must be resting. It is expected
 			// that, if there is functionality ot change order details at a later
 			// date, then we still consider the new order taker.
+			//
+			// The price is matched at maker's price level.
 			if askOrder.ExchTimestamp.After(bidOrder.ExchTimestamp) {
-				book.engine.Trade(askOrder, bidOrder, matchQty)
+				if err := book.engine.DoTrade(askOrder, bidOrder, bestBid.PriceLevel, matchQty); err != nil {
+					return err
+				}
 			} else {
-				book.engine.Trade(bidOrder, askOrder, matchQty)
+				if err := book.engine.DoTrade(bidOrder, askOrder, bestAsk.PriceLevel, matchQty); err != nil {
+					return err
+				}
 			}
 
-			// Move forward
+			// Remove order from book if it is completelly filled.
 			if askOrder.Quantity == 0 {
-				aIdx++
+				bestAsk.Orders.Delete(askOrder)
 			}
 			if bidOrder.Quantity == 0 {
-				bIdx++
+				bestBid.Orders.Delete(bidOrder)
 			}
 		}
 
-		// If we are here, done one or more of the following:
-		// 1. We have partially or fully consumed a price level.
-		// 2. We have depleted the remaining order quantity (i.e. no more matches).
-		//
-		// Case 2 is handled on the re-loop. We handle case 1.
-		if aIdx > 0 {
-			bestAsk.Orders = bestAsk.Orders[aIdx:]
-		}
-		if bIdx > 0 {
-			bestBid.Orders = bestBid.Orders[bIdx:]
-		}
 		// Full consumption cases (i.e. empty levels).
-		if len(bestAsk.Orders) == 0 {
+		if bestAsk.Orders.Len() == 0 {
 			book.Asks.Delete(bestAsk)
 		}
-		if len(bestBid.Orders) == 0 {
+		if bestBid.Orders.Len() == 0 {
 			book.Bids.Delete(bestBid)
 		}
 	}
@@ -177,41 +191,30 @@ func (book *OrderBook) handleMarket(order Order) error {
 			return ErrNotEnoughLiquidity
 		}
 
-		var i int
-		var restingOrder *Order
-		for i, restingOrder = range level.Orders {
+		level.Orders.DeleteAscend(nil, func(restingOrder *Order) btree.Action {
+			// Give up if the original order is filled fully.
+			if order.Quantity <= 0 {
+				return btree.Stop
+			}
+
 			matchQty := min(order.Quantity, restingOrder.Quantity)
 			order.Quantity -= matchQty
 			restingOrder.Quantity -= matchQty
 
 			// Consume order as much as possible and book trade, passing
 			// the taker and maker.
-			book.engine.Trade(&order, restingOrder, matchQty)
+			book.engine.DoTrade(&order, restingOrder, level.PriceLevel, matchQty)
 
 			if restingOrder.Quantity == 0 {
 				liftedOrders++
+				return btree.Delete
 			}
+			return btree.Keep
+		})
 
-			// Break out if we have filled the liquidity quota
-			if order.Quantity == 0 {
-				break
-			}
-		}
-
-		// Resizing Logic
-		if restingOrder.Quantity == 0 {
-			// If the last order we touched is empty, we consumed it.
-			// If we consumed the whole level (i is the last index), delete level.
-			if i == len(level.Orders)-1 {
-				levels.Delete(level)
-			} else {
-				// Otherwise, slice off the consumed orders (0 to i)
-				level.Orders = level.Orders[i+1:]
-			}
-		} else {
-			// We partially filled 'restingOrder' .
-			// We remove all orders strictly *before* i.
-			level.Orders = level.Orders[i:]
+		// If orders are empty, delete the price level.
+		if level.Orders.Len() == 0 {
+			levels.Delete(level)
 		}
 	}
 
@@ -250,16 +253,24 @@ func (book *OrderBook) handleLimit(order Order) error {
 	// Levels comparator only accounts for price levels, so we create a dummy price
 	// level for the search.
 	level, ok := levels.GetMut(&PriceLevel{PriceLevel: order.LimitPrice})
-	if ok {
-		// If the price level already exists, just append onto the existing orders.
-		level.Orders = append(level.Orders, &order)
-	} else {
-		// Otherwise, if the price level does not exist, create the price level.
-		levels.Set(&PriceLevel{
+	// if ok {
+	// 	// If the price level already exists, just append onto the existing orders.
+	// 	level.Orders = append(level.Orders, &order)
+	// } else {
+	// 	// Otherwise, if the price level does not exist, create the price level.
+	// 	levels.Set(&PriceLevel{
+	// 		PriceLevel: order.LimitPrice,
+	// 		Orders:     []*Order{&order},
+	// 	})
+	// }
+	if !ok {
+		level = &PriceLevel{
 			PriceLevel: order.LimitPrice,
-			Orders:     []*Order{&order},
-		})
+			Orders:     btree.NewBTreeG(OrderAsc),
+		}
+		levels.Set(level)
 	}
+	level.Orders.Set(&order)
 
 	// Trigger the matching.
 	return book.Match()
