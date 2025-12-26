@@ -2,8 +2,9 @@ package engine
 
 import (
 	"errors"
-	"github.com/tidwall/btree"
 	"time"
+
+	"github.com/tidwall/btree"
 )
 
 var (
@@ -12,8 +13,8 @@ var (
 )
 
 type PriceLevel struct {
-	priceLevel float64
-	orders     []*Order
+	PriceLevel float64
+	Orders     []*Order
 }
 
 type PriceLevels = btree.BTreeG[*PriceLevel]
@@ -23,8 +24,8 @@ type OrderBook struct {
 
 	// Price levels to orders sat on the price level, sorted by time added
 	// as they will be push-back'd.
-	bids *PriceLevels
-	asks *PriceLevels
+	Bids *PriceLevels
+	Asks *PriceLevels
 
 	// Some book keeping
 	nBuyOrders   uint64 // Track the number of bids in the book.
@@ -33,18 +34,19 @@ type OrderBook struct {
 	sellQuantity uint64 // Track the ask-side liquidity of the book.
 }
 
-func NewOrderBook() OrderBook {
+func NewOrderBook(engine *Engine) OrderBook {
 	// Sorted greatest first.
 	bids := btree.NewBTreeG(func(a, b *PriceLevel) bool {
-		return a.priceLevel > b.priceLevel
+		return a.PriceLevel > b.PriceLevel
 	})
 	// Sorted least first.
 	asks := btree.NewBTreeG(func(a, b *PriceLevel) bool {
-		return a.priceLevel < b.priceLevel
+		return a.PriceLevel < b.PriceLevel
 	})
 	return OrderBook{
-		bids: bids,
-		asks: asks,
+		engine: engine,
+		Bids:   bids,
+		Asks:   asks,
 	}
 }
 
@@ -83,19 +85,19 @@ func (book *OrderBook) Match() error {
 	// Consume crossing orders. This will essentially be our latest order sweeping
 	// across priceLevels as far as its depth and liquidity go.
 	for {
-		bestBid, bidOk := book.bids.MinMut()
-		bestAsk, askOk := book.asks.MinMut()
+		bestBid, bidOk := book.Bids.MinMut()
+		bestAsk, askOk := book.Asks.MinMut()
 
 		// If either side is empty, or prices don't cross, we are done.
-		if !bidOk || !askOk || bestBid.priceLevel < bestAsk.priceLevel {
+		if !bidOk || !askOk || bestBid.PriceLevel < bestAsk.PriceLevel {
 			break
 		}
 
 		// While there are still orders on either side, move forward on the orders.
 		var aIdx, bIdx int
-		for aIdx < len(bestAsk.orders) && bIdx < len(bestBid.orders) {
-			askOrder := bestAsk.orders[aIdx]
-			bidOrder := bestBid.orders[bIdx]
+		for aIdx < len(bestAsk.Orders) && bIdx < len(bestBid.Orders) {
+			askOrder := bestAsk.Orders[aIdx]
+			bidOrder := bestBid.Orders[bIdx]
 
 			matchQty := min(askOrder.Quantity, bidOrder.Quantity)
 			askOrder.Quantity -= matchQty
@@ -126,17 +128,17 @@ func (book *OrderBook) Match() error {
 		//
 		// Case 2 is handled on the re-loop. We handle case 1.
 		if aIdx > 0 {
-			bestAsk.orders = bestAsk.orders[aIdx:]
+			bestAsk.Orders = bestAsk.Orders[aIdx:]
 		}
 		if bIdx > 0 {
-			bestBid.orders = bestBid.orders[bIdx:]
+			bestBid.Orders = bestBid.Orders[bIdx:]
 		}
 		// Full consumption cases (i.e. empty levels).
-		if len(bestAsk.orders) == 0 {
-			book.asks.Delete(bestAsk)
+		if len(bestAsk.Orders) == 0 {
+			book.Asks.Delete(bestAsk)
 		}
-		if len(bestBid.orders) == 0 {
-			book.bids.Delete(bestBid)
+		if len(bestBid.Orders) == 0 {
+			book.Bids.Delete(bestBid)
 		}
 	}
 	return nil
@@ -157,9 +159,9 @@ func (book *OrderBook) handleMarket(order Order) error {
 	var levels *PriceLevels
 	switch order.Side {
 	case Buy:
-		levels = book.asks
+		levels = book.Asks
 	case Sell:
-		levels = book.bids
+		levels = book.Bids
 	}
 
 	// While liquidity left sweep the order book. Keep track of the number of orders
@@ -177,7 +179,7 @@ func (book *OrderBook) handleMarket(order Order) error {
 
 		var i int
 		var restingOrder *Order
-		for i, restingOrder = range level.orders {
+		for i, restingOrder = range level.Orders {
 			matchQty := min(order.Quantity, restingOrder.Quantity)
 			order.Quantity -= matchQty
 			restingOrder.Quantity -= matchQty
@@ -200,16 +202,16 @@ func (book *OrderBook) handleMarket(order Order) error {
 		if restingOrder.Quantity == 0 {
 			// If the last order we touched is empty, we consumed it.
 			// If we consumed the whole level (i is the last index), delete level.
-			if i == len(level.orders)-1 {
+			if i == len(level.Orders)-1 {
 				levels.Delete(level)
 			} else {
 				// Otherwise, slice off the consumed orders (0 to i)
-				level.orders = level.orders[i+1:]
+				level.Orders = level.Orders[i+1:]
 			}
 		} else {
 			// We partially filled 'restingOrder' .
 			// We remove all orders strictly *before* i.
-			level.orders = level.orders[i:]
+			level.Orders = level.Orders[i:]
 		}
 	}
 
@@ -235,9 +237,9 @@ func (book *OrderBook) handleLimit(order Order) error {
 	var levels *PriceLevels
 	switch order.Side {
 	case Buy:
-		levels = book.bids
+		levels = book.Bids
 	case Sell:
-		levels = book.asks
+		levels = book.Asks
 	}
 
 	// TODO: Should probably do some validation on rejecting orders that are too far
@@ -247,15 +249,15 @@ func (book *OrderBook) handleLimit(order Order) error {
 
 	// Levels comparator only accounts for price levels, so we create a dummy price
 	// level for the search.
-	level, ok := levels.GetMut(&PriceLevel{priceLevel: order.LimitPrice})
+	level, ok := levels.GetMut(&PriceLevel{PriceLevel: order.LimitPrice})
 	if ok {
 		// If the price level already exists, just append onto the existing orders.
-		level.orders = append(level.orders, &order)
+		level.Orders = append(level.Orders, &order)
 	} else {
 		// Otherwise, if the price level does not exist, create the price level.
 		levels.Set(&PriceLevel{
-			priceLevel: order.LimitPrice,
-			orders:     []*Order{&order},
+			PriceLevel: order.LimitPrice,
+			Orders:     []*Order{&order},
 		})
 	}
 

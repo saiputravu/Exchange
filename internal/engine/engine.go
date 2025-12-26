@@ -5,22 +5,22 @@ import "time"
 // This is the main matchine engine.
 
 type Engine struct {
-	books map[AssetType]OrderBook
+	Books map[AssetType]OrderBook
 }
 
 func New(supportedAssets ...AssetType) *Engine {
 	engine := &Engine{
-		books: make(map[AssetType]OrderBook),
+		Books: make(map[AssetType]OrderBook),
 	}
 
 	for assetType := range supportedAssets {
-		engine.books[AssetType(assetType)] = NewOrderBook()
+		engine.Books[AssetType(assetType)] = NewOrderBook(engine)
 	}
 
 	return engine
 }
 
-func (engine *Engine) PlaceOrder(order Order) {
+func (engine *Engine) PlaceOrder(assetType AssetType, order Order) {
 }
 
 // Match sanity checks before firing an execution report to the

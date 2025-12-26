@@ -1,6 +1,9 @@
 package engine
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 type Order struct {
 	UUID          string    // Order tracked uuid
@@ -14,4 +17,30 @@ type Order struct {
 	Timestamp     time.Time // Time of arrival of order
 	ExchTimestamp time.Time // Time of arrival of order into the book
 	Owner         string    // Who ownes this order
+}
+
+func (order Order) String() string {
+	return fmt.Sprintf(
+		`UUID:          %v
+AssetType:     %v
+OrderType:     %v
+Ticker:        %s
+Side:          %v
+LimitPrice:    %f
+Quantity:      %d (Total: %d)
+Timestamp:     %v
+ExchTimestamp: %v
+Owner:         %s`,
+		order.UUID,
+		order.AssetType,
+		order.OrderType,
+		order.Ticker,
+		order.Side,
+		order.LimitPrice,
+		order.Quantity,
+		order.TotalQuantity,
+		order.Timestamp.Format(time.RFC3339), // Formatted for readability
+		order.ExchTimestamp.Format(time.RFC3339),
+		order.Owner,
+	)
 }
