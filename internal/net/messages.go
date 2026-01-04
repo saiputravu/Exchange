@@ -30,8 +30,10 @@ const (
 type ReportMessageType int
 
 const (
-	ExecutionReport ReportMessageType = iota
+	HeartbeatRequest ReportMessageType = iota
+	ExecutionReport
 	ErrorReport
+	OrderPlacedReport
 )
 
 type Message interface {
@@ -41,7 +43,7 @@ type Message interface {
 // Message format constants
 const (
 	BaseMessageHeaderLen        = 2
-	NewOrderMessageHeaderLen    = 2 + 2 + 4 + 8 + 8 + 1 + 1
+	NewOrderMessageHeaderLen    = 2 + 2 + 4 + 8 + 8 + 1
 	CancelOrderMessageHeaderLen = 2 + 16
 )
 
@@ -79,17 +81,16 @@ func parseMessage(msg []byte) (Message, error) {
 
 type NewOrderMessage struct {
 	BaseMessage
-	AssetType   AssetType // 2 bytes
-	OrderType   OrderType // 2 bytes
-	Ticker      string    // 4 bytes
-	LimitPrice  float64   // 8 bytes
-	Quantity    uint64    // 8 bytes
-	Side        Side      // 1 byte
-	UsernameLen uint8     // 1 byte
-	Username    string    // n bytes
+	AssetType  AssetType // 2 bytes
+	OrderType  OrderType // 2 bytes
+	Ticker     string    // 4 bytes
+	LimitPrice float64   // 8 bytes
+	Quantity   uint64    // 8 bytes
+	Side       Side      // 1 byte
 }
 
-func (o *NewOrderMessage) Order() (Order, error) {
+// Order generates an Order type, given an owner.
+func (o *NewOrderMessage) Order(owner string) (Order, error) {
 	orderUUID := uuid.New().String()
 	if orderUUID == "" {
 		return Order{}, ErrInvalidUUID
@@ -105,7 +106,7 @@ func (o *NewOrderMessage) Order() (Order, error) {
 		Quantity:      o.Quantity,
 		TotalQuantity: o.Quantity,
 		Timestamp:     time.Now(),
-		Owner:         o.Username,
+		Owner:         owner,
 	}, nil
 }
 
@@ -118,14 +119,12 @@ func parseNewOrder(msg []byte) (NewOrderMessage, error) {
 	m.LimitPrice = math.Float64frombits(binary.BigEndian.Uint64(msg[8:16]))
 	m.Quantity = binary.BigEndian.Uint64(msg[16:24])
 	m.Side = Side(msg[24])
-	m.UsernameLen = uint8(msg[25])
 
 	// Calculate expected total length.
-	expectedTotalLen := int(NewOrderMessageHeaderLen + m.UsernameLen)
+	expectedTotalLen := int(NewOrderMessageHeaderLen)
 	if len(msg) < expectedTotalLen {
 		return NewOrderMessage{}, ErrMessageTooShort
 	}
-	m.Username = string(msg[26 : 26+m.UsernameLen])
 
 	return m, nil
 }
@@ -166,7 +165,7 @@ type Report struct {
 const reportFixedHeaderLen = 1 + 1 + 1 + 8 + 8 + 8 + 2 + 4 + 4 + 16
 
 // Serialize converts the report to be sent on the wire.
-func (r *Report) Serialize() ([]byte, error) {
+func (r Report) Serialize() ([]byte, error) {
 	totalSize := reportFixedHeaderLen + len(r.Err) + len(r.Counterparty)
 
 	// Pad when unset
@@ -256,4 +255,17 @@ func generateWireErrorReports(err error) ([]byte, error) {
 		Err:         errStr,
 	}
 	return report.Serialize()
+}
+
+func generateWireOrderPlacedReport(ord Order) ([]byte, error) {
+	return Report{
+		MessageType: OrderPlacedReport,
+		AssetType:   ord.AssetType,
+		Side:        ord.Side,
+		Timestamp:   uint64(time.Now().UnixNano()),
+		Quantity:    ord.Quantity,
+		Price:       ord.LimitPrice,
+		Ticker:      ord.Ticker[:4],
+		UUID:        ord.UUID[:16],
+	}.Serialize()
 }

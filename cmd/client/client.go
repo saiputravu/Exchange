@@ -11,7 +11,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"fenrir/internal/common"
 	fenrirNet "fenrir/internal/net"
@@ -73,15 +72,12 @@ func main() {
 	case "place":
 		quantities := parseQuantities(*qtyStr)
 		for _, q := range quantities {
-			// Using common.Equities as the default AssetType
 			err := sendPlaceOrder(conn, *owner, common.Equities, orderType, *ticker, *price, q, side)
 			if err != nil {
-				log.Printf("Failed to place order (Qty: %d): %v", q, err)
+				fmt.Printf("Failed to place order (Qty: %d): %v", q, err)
 			} else {
 				fmt.Printf("-> Sent %s Order: %s %d @ %.2f\n", strings.ToUpper(*sideStr), *ticker, q, *price)
 			}
-			// Small optional sleep to ensure server processes sequence distinctly if needed
-			time.Sleep(5 * time.Millisecond)
 		}
 
 	case "cancel":
@@ -110,7 +106,8 @@ func main() {
 
 	// Keep the client alive to receive execution reports
 	fmt.Println("\nListening for reports... (Press Ctrl+C to exit)")
-	select {}
+	for {
+	}
 }
 
 // parseQuantities splits a comma-separated string into a slice of uint64
@@ -241,15 +238,18 @@ func readReports(conn net.Conn) {
 		}
 
 		// 4. Print Report using imported Enums
-		if msgType == fenrirNet.ErrorReport {
+		switch msgType {
+		case fenrirNet.ErrorReport:
 			fmt.Printf("\n[SERVER ERROR] %s\n", errStr)
-		} else {
+		case fenrirNet.ExecutionReport:
 			sideStr := "BUY"
 			if side == common.Sell {
 				sideStr = "SELL"
 			}
 			fmt.Printf("\n[EXECUTION] Match: %s %s | Qty: %d | Price: %.2f | vs: %s | UUID: %s\n",
 				sideStr, ticker, qty, price, counterparty, strings.TrimRight(uuid, "\x00"))
+		case fenrirNet.OrderPlacedReport:
+			fmt.Printf("Order placed (UUID: %s)\n", uuid)
 		}
 	}
 }

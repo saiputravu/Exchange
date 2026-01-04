@@ -29,7 +29,6 @@ func OrderAsc(a, b *Order) bool {
 type PriceLevel struct {
 	PriceLevel float64
 	Orders     *btree.BTreeG[*Order]
-	// Orders     []*Order
 }
 
 type PriceLevels = btree.BTreeG[*PriceLevel]

@@ -8,16 +8,14 @@ import (
 	"fmt"
 	"net"
 	"sync"
-	"time"
 
 	"github.com/rs/zerolog/log"
 	tomb "gopkg.in/tomb.v2"
 )
 
 const (
-	MAX_RECV_SIZE      = 4 * 1024
-	defaultNWorkers    = 10
-	defaultConnTimeout = time.Second
+	MAX_RECV_SIZE   = 4 * 1024
+	defaultNWorkers = 10
 )
 
 var (
@@ -119,8 +117,9 @@ func (s *Server) Run(ctx context.Context) {
 			}
 
 			log.Info().
-				Str("address", conn.LocalAddr().String()).
+				Str("address", conn.RemoteAddr().String()).
 				Msg("new client added")
+
 			// Add the client to client sessions we are tracking.
 			// We expect to potentially maintain a long TCP session.
 			s.addClientSession(conn)
@@ -142,32 +141,33 @@ func (s *Server) ReportTrade(trade Trade, err error) error {
 
 	party, partyOk := s.clientSessions[trade.Party.Owner]
 	counterParty, counterPartyOk := s.clientSessions[trade.CounterParty.Owner]
+	log.Info().Str("party", trade.Party.Owner).Str("counter", trade.CounterParty.Owner).Msg("reporttrade")
 	if !partyOk || !counterPartyOk {
-		return ErrClientDoesNotExist
+		return fmt.Errorf("client does not exist: party [%v], counter [%v]", party, counterParty)
 	}
 
 	_, err = party.conn.Write(partyReport)
 	if err != nil {
-		delete(s.clientSessions, party.conn.LocalAddr().String())
+		s.deleteClientSessionLockFree(party.conn.RemoteAddr().String())
 		return fmt.Errorf("unable to send report: %w", err)
 	}
 
-	_, err = party.conn.Write(counterPartyReport)
+	_, err = counterParty.conn.Write(counterPartyReport)
 	if err != nil {
-		delete(s.clientSessions, counterParty.conn.LocalAddr().String())
+		s.deleteClientSessionLockFree(counterParty.conn.RemoteAddr().String())
 		return fmt.Errorf("unable to send report: %w", err)
 	}
 	return nil
 }
 
-func (s *Server) ReportError(clientAddress string, err error) error {
-	s.clientSessionsLock.Lock()
-	defer s.clientSessionsLock.Unlock()
-
-	report, err := generateWireErrorReports(err)
+func (s *Server) ReportOrderPlaced(clientAddress string, ord Order) error {
+	report, err := generateWireOrderPlacedReport(ord)
 	if err != nil {
 		return err
 	}
+
+	s.clientSessionsLock.Lock()
+	defer s.clientSessionsLock.Unlock()
 
 	client, ok := s.clientSessions[clientAddress]
 	if !ok {
@@ -176,7 +176,29 @@ func (s *Server) ReportError(clientAddress string, err error) error {
 
 	_, err = client.conn.Write(report)
 	if err != nil {
-		delete(s.clientSessions, clientAddress)
+		s.deleteClientSessionLockFree(clientAddress)
+		return fmt.Errorf("unable to send report: %w", err)
+	}
+	return nil
+}
+
+func (s *Server) ReportError(clientAddress string, err error) error {
+	report, err := generateWireErrorReports(err)
+	if err != nil {
+		return err
+	}
+
+	s.clientSessionsLock.Lock()
+	defer s.clientSessionsLock.Unlock()
+
+	client, ok := s.clientSessions[clientAddress]
+	if !ok {
+		return ErrClientDoesNotExist
+	}
+
+	_, err = client.conn.Write(report)
+	if err != nil {
+		s.deleteClientSessionLockFree(clientAddress)
 		return fmt.Errorf("unable to send report: %w", err)
 	}
 	return nil
@@ -190,7 +212,7 @@ func (s *Server) sessionHandler(t *tomb.Tomb) error {
 		case <-t.Dying():
 			return nil
 		case message := <-s.clientMessages:
-			if err := s.handleMessage(message); err != nil {
+			if err := s.handleMessage(t, message); err != nil {
 				log.Error().
 					Err(err).
 					Str("clientAddress", message.clientAddress).
@@ -202,14 +224,14 @@ func (s *Server) sessionHandler(t *tomb.Tomb) error {
 	}
 }
 
-func (s *Server) handleMessage(message ClientMessage) error {
+func (s *Server) handleMessage(t *tomb.Tomb, message ClientMessage) error {
 	switch message.message.GetType() {
 	case NewOrder:
 		order, ok := message.message.(NewOrderMessage)
 		if !ok {
 			return ErrInvalidMessageType
 		}
-		ord, err := order.Order()
+		ord, err := order.Order(message.clientAddress)
 		if err != nil {
 			return err
 		}
@@ -221,6 +243,18 @@ func (s *Server) handleMessage(message ClientMessage) error {
 				Str("clientAddress", message.clientAddress).
 				Msg("error while placing order")
 		}
+
+		// Report back.
+		t.Go(func() error {
+			if err := s.ReportOrderPlaced(message.clientAddress, ord); err != nil {
+				s.ReportError(message.clientAddress, err)
+				log.Error().
+					Err(err).
+					Str("clientAddress", message.clientAddress).
+					Msg("error while generating order")
+			}
+			return nil
+		})
 	case CancelOrder:
 		// TODO: Implement
 		order, ok := message.message.(CancelOrderMessage)
@@ -260,22 +294,6 @@ func (s *Server) handleConnection(t *tomb.Tomb, task any) error {
 		return ErrImproperConversion
 	}
 
-	defer func() {
-		if err := conn.Close(); err != nil {
-			log.Error().Str("address", conn.LocalAddr().String()).Err(err)
-		}
-	}()
-
-	// Set max read timeout.
-	err := conn.SetDeadline(time.Now().Add(defaultConnTimeout))
-	if err != nil {
-		log.Error().
-			Str("address", conn.LocalAddr().Network()).
-			Err(err).
-			Msg("failed setting deadline for connection")
-		return nil
-	}
-
 	buffer := make([]byte, MAX_RECV_SIZE)
 	select {
 	case <-t.Dying():
@@ -283,15 +301,12 @@ func (s *Server) handleConnection(t *tomb.Tomb, task any) error {
 	default:
 		n, err := conn.Read(buffer)
 		if err != nil {
+			// TODO: Think about heartbeating but I cba.
 			log.Error().
 				Err(err).
-				Str("address", conn.LocalAddr().String()).
+				Str("address", conn.RemoteAddr().String()).
 				Msg("error reading from connection")
-
-			// If a read from a client fails, it is likely that the client
-			// has exited. Clean up the client session.
-			// TODO: Should handle this properly and check for graceful EOF.
-			s.deleteClientSession(conn.LocalAddr().String())
+			s.deleteClientSession(conn.RemoteAddr().String())
 			return nil
 		}
 
@@ -299,15 +314,16 @@ func (s *Server) handleConnection(t *tomb.Tomb, task any) error {
 		if err != nil {
 			log.Error().
 				Err(err).
-				Str("address", conn.LocalAddr().String()).
+				Str("address", conn.RemoteAddr().String()).
 				Msg("error parsing message")
-			s.deleteClientSession(conn.LocalAddr().String())
+			s.deleteClientSession(conn.RemoteAddr().String())
+			return nil
 		}
 
 		// Pass over to the message handling buffer and exit this worker.
 		s.clientMessages <- ClientMessage{
 			message:       message,
-			clientAddress: conn.LocalAddr().String(),
+			clientAddress: conn.RemoteAddr().String(),
 		}
 
 		// Push the client connection back to handle the next message.
@@ -321,7 +337,7 @@ func (s *Server) addClientSession(conn net.Conn) {
 	s.clientSessionsLock.Lock()
 	defer s.clientSessionsLock.Unlock()
 
-	s.clientSessions[conn.LocalAddr().String()] = ClientSession{
+	s.clientSessions[conn.RemoteAddr().String()] = ClientSession{
 		conn: conn,
 	}
 }
@@ -331,5 +347,28 @@ func (s *Server) deleteClientSession(address string) {
 	s.clientSessionsLock.Lock()
 	defer s.clientSessionsLock.Unlock()
 
-	delete(s.clientSessions, address)
+	if client, ok := s.clientSessions[address]; ok {
+		// Cleanup the connection object.
+		if err := client.conn.Close(); err != nil {
+			log.Error().
+				Err(err).
+				Str("clientAddress", address).
+				Msg("unable to close client connection")
+		}
+		delete(s.clientSessions, address)
+	}
+}
+
+// deleteClientSessionLockFree is intended to prevent renetrancy on locks.
+func (s *Server) deleteClientSessionLockFree(address string) {
+	if client, ok := s.clientSessions[address]; ok {
+		// Cleanup the connection object.
+		if err := client.conn.Close(); err != nil {
+			log.Error().
+				Err(err).
+				Str("clientAddress", address).
+				Msg("unable to close client connection")
+		}
+		delete(s.clientSessions, address)
+	}
 }
